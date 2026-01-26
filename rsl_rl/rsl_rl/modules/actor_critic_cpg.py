@@ -214,6 +214,8 @@ class ActorCriticCPG(nn.Module):
     def update_distribution(self, observations):
         """Update action distribution based on observations."""
         mean = self.actor(observations)
+        # Clamp mean to prevent NaN/Inf in distribution (addresses gradient explosion)
+        mean = torch.clamp(mean, min=-100.0, max=100.0)
         self.distribution = Normal(mean, mean * 0.0 + self.std)
     
     def act(self, observations, **kwargs):
