@@ -114,6 +114,10 @@ class ActorCritic(nn.Module):
     def evaluate(self, critic_observations, **kwargs):
         value = self.critic(critic_observations)
         return value
+    
+    def get_joint_commands(self, actions):
+        """Identity function for compatibility with CPG-augmented version."""
+        return actions
 
 
 def get_activation(act_name):

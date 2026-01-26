@@ -31,6 +31,7 @@ parser.add_argument("--use_cnn", action="store_true", default=None, help="Name o
 parser.add_argument("--arm_fixed", action="store_true", default=False, help="Fix the robot's arms.")
 parser.add_argument("--use_rnn", action="store_true", default=False, help="Use RNN in the actor-critic model.")
 parser.add_argument("--history_length", default=0, type=int, help="Length of history buffer.")
+parser.add_argument("--enable_cpg", action="store_true", default=False, help="Enable CPG (Central Pattern Generator) with Hopf oscillators.")
 
 # append RSL-RL cli arguments
 cli_args.add_rsl_rl_args(parser)

@@ -86,6 +86,15 @@ def parse_rsl_rl_cfg(task_name, args_cli: argparse.Namespace, play=False) -> Rsl
             rslrl_cfg.policy.class_name = "ActorCriticRecurrent"
         else:
             rslrl_cfg.policy.class_name = "ActorCriticDepthCNNRecurrent"
+    
+    if args_cli.enable_cpg:
+        # Use CPG-augmented actor-critic
+        rslrl_cfg.policy.class_name = "ActorCriticCPG"
+        rslrl_cfg.policy.enable_cpg = True
+        # Add CPG configuration
+        if not hasattr(rslrl_cfg.policy, 'cpg_config'):
+            rslrl_cfg.policy.cpg_config = {}
+        rslrl_cfg.policy.cpg_config["enable_cpg"] = True
             
     rslrl_cfg.policy.history_length = args_cli.history_length
 
