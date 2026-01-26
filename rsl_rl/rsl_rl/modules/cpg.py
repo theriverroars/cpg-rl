@@ -124,9 +124,11 @@ class CPGNetwork(nn.Module):
         
         # Initialize oscillator states: [num_envs, num_oscillators, 2]
         # Start with small random values to break symmetry
+        # Use persistent=False so this is not saved/loaded with state_dict (it's environment-specific)
         self.register_buffer(
             "oscillator_states",
-            self.INITIAL_STATE_SCALE * torch.randn(num_envs, self.num_oscillators, self.OSCILLATOR_STATE_DIM, device=device)
+            self.INITIAL_STATE_SCALE * torch.randn(num_envs, self.num_oscillators, self.OSCILLATOR_STATE_DIM, device=device),
+            persistent=False
         )
         
         # Coupling matrix: oscillators on the same leg are coupled

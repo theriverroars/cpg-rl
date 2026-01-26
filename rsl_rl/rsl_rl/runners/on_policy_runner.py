@@ -311,7 +311,9 @@ class OnPolicyRunner:
 
     def load(self, path, load_optimizer=True):
         loaded_dict = torch.load(path)
-        self.alg.actor_critic.load_state_dict(loaded_dict["model_state_dict"])
+        # Use strict=False to allow loading checkpoints with different num_envs
+        # (CPG oscillator_states will be re-initialized to current num_envs)
+        self.alg.actor_critic.load_state_dict(loaded_dict["model_state_dict"], strict=False)
         if self.empirical_normalization:
             self.obs_normalizer.load_state_dict(loaded_dict["obs_norm_state_dict"])
             self.critic_obs_normalizer.load_state_dict(loaded_dict["critic_obs_norm_state_dict"])

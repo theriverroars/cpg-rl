@@ -72,19 +72,16 @@ from utils import quat2eulers
 
 
 def main():
-    """Train with RSL-RL agent."""
+    """Play with a trained RSL-RL agent."""
     # parse configuration
-    # env_cfg: ManagerBasedRLEnvCfg = parse_env_cfg(
-    #     args_cli.task, use_gpu=not args_cli.cpu, num_envs=args_cli.num_envs, use_fabric=not args_cli.disable_fabric
-    # )
     env_cfg = parse_env_cfg(args_cli.task, num_envs=args_cli.num_envs)
-    agent_cfg: RslRlOnPolicyRunnerCfg = cli_args.parse_rsl_rl_cfg(args_cli.task, args_cli)
+    
+    # Get the initial agent config from CLI args (this sets up CPG if --enable_cpg is passed)
+    agent_cfg: RslRlOnPolicyRunnerCfg = cli_args.parse_rsl_rl_cfg(args_cli.task, args_cli, play=True)
 
     # specify directory for logging experiments
     log_root_path = os.path.join("logs", "rsl_rl", agent_cfg.experiment_name)
     log_root_path = os.path.abspath(log_root_path)
-    # print(f"[INFO] Logging experiment in directory: {log_root_path}")
-    # specify directory for logging runs: {time-stamp}_{run_name}
     log_dir = os.path.join(log_root_path, args_cli.load_run)
     print(f"[INFO] Loading run from directory: {log_dir}")
 
@@ -92,6 +89,25 @@ def main():
     log_agent_cfg_file_path = os.path.join(log_dir, "params", "agent.yaml")
     assert os.path.exists(log_agent_cfg_file_path), f"Agent config file not found: {log_agent_cfg_file_path}"
     log_agent_cfg_dict = load_yaml(log_agent_cfg_file_path)
+    
+    # Check if the loaded checkpoint was trained with CPG
+    checkpoint_has_cpg = log_agent_cfg_dict.get("policy", {}).get("enable_cpg", False)
+    checkpoint_history_length = log_agent_cfg_dict.get("policy", {}).get("history_length", 0)
+    
+    # If checkpoint has CPG but CLI doesn't specify, enable CPG
+    if checkpoint_has_cpg and not args_cli.enable_cpg:
+        print("[INFO] Checkpoint was trained with CPG. Enabling CPG mode for inference.")
+        args_cli.enable_cpg = True
+        # Re-parse agent config with CPG enabled
+        agent_cfg = cli_args.parse_rsl_rl_cfg(args_cli.task, args_cli, play=True)
+    
+    # Use history_length from checkpoint if not specified via CLI
+    if args_cli.history_length == 0 and checkpoint_history_length > 0:
+        print(f"[INFO] Using history_length={checkpoint_history_length} from checkpoint.")
+        args_cli.history_length = checkpoint_history_length
+    
+    # Update agent config with checkpoint config
+    # This will override things like learning params, but keep the CPG config properly set
     update_class_from_dict(agent_cfg, log_agent_cfg_dict)
 
 
