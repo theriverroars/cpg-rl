@@ -29,6 +29,9 @@ class ActorCriticCPG(nn.Module):
     
     is_recurrent = False
     
+    # Constants for CPG parameters
+    NUM_CPG_PARAMS = 3  # mu, frequency, offset
+    
     def __init__(
         self,
         num_actor_obs,
@@ -79,7 +82,7 @@ class ActorCriticCPG(nn.Module):
         # Determine actor output dimension
         if enable_cpg:
             # Output: mu, frequency, offset for each oscillator
-            actor_output_dim = num_actions * 3  # 36 for 12 joints
+            actor_output_dim = num_actions * self.NUM_CPG_PARAMS
             
             # CPG network
             if cpg_config is None:
@@ -102,6 +105,8 @@ class ActorCriticCPG(nn.Module):
             self.frequency_range = cpg_config.get("frequency_range", (1.0, 3.0))
             self.mu_range = cpg_config.get("mu_range", (0.0, 1.0))
             self.offset_range = cpg_config.get("offset_range", (-0.5, 0.5))
+            # Pre-compute offset scale for efficiency
+            self.offset_scale = max(abs(self.offset_range[0]), abs(self.offset_range[1]))
             
         else:
             # Standard mode: direct joint commands
@@ -165,27 +170,27 @@ class ActorCriticCPG(nn.Module):
     def entropy(self):
         return self.distribution.entropy().sum(dim=-1)
     
-    def _process_actor_output(self, actor_output: torch.Tensor) -> torch.Tensor:
+    def process_cpg_params_to_joint_commands(self, actor_output: torch.Tensor) -> torch.Tensor:
         """
-        Process actor output to generate final actions.
+        Process actor output to generate final joint commands.
         
         If CPG is enabled, actor_output contains CPG parameters which are
         passed through the CPG network to generate joint commands.
-        Otherwise, actor_output is used directly as actions.
+        Otherwise, actor_output is used directly as joint commands.
         
         Args:
             actor_output: Raw output from actor network [batch_size, output_dim]
             
         Returns:
-            actions: Joint commands [batch_size, num_actions]
+            joint_commands: Joint commands to send to the environment [batch_size, num_actions]
         """
         if self.enable_cpg:
             # Split actor output into mu, frequency, offset
-            # actor_output shape: [batch_size, num_actions * 3]
+            # actor_output shape: [batch_size, num_actions * NUM_CPG_PARAMS]
             batch_size = actor_output.shape[0]
             
-            # Reshape to [batch_size, 3, num_actions] and transpose to [batch_size, num_actions, 3]
-            params = actor_output.view(batch_size, 3, self.num_actions).transpose(1, 2)
+            # Reshape to [batch_size, NUM_CPG_PARAMS, num_actions] and transpose to [batch_size, num_actions, NUM_CPG_PARAMS]
+            params = actor_output.view(batch_size, self.NUM_CPG_PARAMS, self.num_actions).transpose(1, 2)
             
             # Extract parameters and apply ranges
             mu_raw = params[..., 0]  # [batch_size, num_actions]
@@ -195,16 +200,16 @@ class ActorCriticCPG(nn.Module):
             # Apply sigmoid/tanh to bound parameters
             mu = torch.sigmoid(mu_raw) * (self.mu_range[1] - self.mu_range[0]) + self.mu_range[0]
             frequency = torch.sigmoid(freq_raw) * (self.frequency_range[1] - self.frequency_range[0]) + self.frequency_range[0]
-            offset = torch.tanh(offset_raw) * max(abs(self.offset_range[0]), abs(self.offset_range[1]))
+            offset = torch.tanh(offset_raw) * self.offset_scale
             
             # Generate joint commands via CPG
-            actions = self.cpg_network(mu, frequency, offset)
+            joint_commands = self.cpg_network(mu, frequency, offset)
             
         else:
             # Direct joint commands
-            actions = actor_output
+            joint_commands = actor_output
         
-        return actions
+        return joint_commands
     
     def update_distribution(self, observations):
         """Update action distribution based on observations."""
@@ -239,7 +244,7 @@ class ActorCriticCPG(nn.Module):
             joint_commands: Joint commands to send to the environment [batch_size, num_actions]
         """
         if self.enable_cpg:
-            return self._process_actor_output(cpg_params_or_actions)
+            return self.process_cpg_params_to_joint_commands(cpg_params_or_actions)
         else:
             return cpg_params_or_actions
     
@@ -258,7 +263,7 @@ class ActorCriticCPG(nn.Module):
         
         if self.enable_cpg:
             # Use mean CPG parameters (no sampling)
-            actions = self._process_actor_output(actor_output)
+            actions = self.process_cpg_params_to_joint_commands(actor_output)
         else:
             actions = actor_output
         

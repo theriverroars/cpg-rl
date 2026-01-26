@@ -88,6 +88,10 @@ class CPGNetwork(nn.Module):
     The RL policy outputs mu, phi (phase offset), and offset for each oscillator.
     """
     
+    # Constants
+    OSCILLATOR_STATE_DIM = 2  # [x, y] coordinates
+    INITIAL_STATE_SCALE = 0.1  # Small random values to break symmetry
+    
     def __init__(
         self,
         num_envs: int,
@@ -122,7 +126,7 @@ class CPGNetwork(nn.Module):
         # Start with small random values to break symmetry
         self.register_buffer(
             "oscillator_states",
-            0.1 * torch.randn(num_envs, self.num_oscillators, 2, device=device)
+            self.INITIAL_STATE_SCALE * torch.randn(num_envs, self.num_oscillators, self.OSCILLATOR_STATE_DIM, device=device)
         )
         
         # Coupling matrix: oscillators on the same leg are coupled
@@ -153,8 +157,8 @@ class CPGNetwork(nn.Module):
             env_ids = torch.arange(self.num_envs, device=self.device)
         
         # Reset to small random values
-        self.oscillator_states[env_ids] = 0.1 * torch.randn(
-            len(env_ids), self.num_oscillators, 2, device=self.device
+        self.oscillator_states[env_ids] = self.INITIAL_STATE_SCALE * torch.randn(
+            len(env_ids), self.num_oscillators, self.OSCILLATOR_STATE_DIM, device=self.device
         )
     
     def forward(
