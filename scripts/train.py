@@ -32,7 +32,7 @@ parser.add_argument("--use_cnn", action="store_true", default=None, help="Name o
 parser.add_argument("--arm_fixed", action="store_true", default=False, help="Fix the robot's arms.")
 parser.add_argument("--use_rnn", action="store_true", default=False, help="Use RNN in the actor-critic model.")
 parser.add_argument("--history_length", default=0, type=int, help="Length of history buffer.")
-parser.add_argument("--enable_cpg", action="store_true", default=False, help="Enable CPG (Central Pattern Generator) with Hopf oscillators.")
+parser.add_argument("--enable_cpg", action="store_true", default=True, help="Enable CPG (Central Pattern Generator) with Hopf oscillators.")
 
 # append RSL-RL cli arguments
 cli_args.add_rsl_rl_args(parser)
@@ -104,7 +104,8 @@ def main():
             "video_folder": os.path.join(log_dir, "videos"),
             "step_trigger": lambda step: step % args_cli.video_interval == 0,
             "video_length": args_cli.video_length,
-            "disable_logger": True,
+            "disable_logger": False,
+            "logger":"wandb"
         }
         print("[INFO] Recording videos during training.")
         print_dict(video_kwargs, nesting=4)
@@ -116,7 +117,11 @@ def main():
         env = RslRlVecEnvWrapper(env)
 
     # create runner from rsl-rl
-    runner = OnPolicyRunner(env, agent_cfg.to_dict(), log_dir=log_dir, device=agent_cfg.device)
+    agent_cfg_dict = agent_cfg.to_dict()
+    # Enable W&B logging for better monitoring
+    agent_cfg_dict["logger"] = "wandb"
+    agent_cfg_dict["disable_logger"] = False
+    runner = OnPolicyRunner(env, agent_cfg_dict, log_dir=log_dir, device=agent_cfg.device)
     # write git state to logs
     runner.add_git_repo_to_log(__file__)
     # save resume path before creating a new log_dir

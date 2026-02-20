@@ -41,7 +41,7 @@ class ActorCriticCPG(nn.Module):
         critic_hidden_dims=[256, 256, 256],
         activation="elu",
         init_noise_std=1.0,
-        enable_cpg=False,
+        enable_cpg=True,
         cpg_config=None,
         **kwargs,
     ):
@@ -154,6 +154,12 @@ class ActorCriticCPG(nn.Module):
             done_env_ids = dones.nonzero(as_tuple=False).flatten()
             if len(done_env_ids) > 0:
                 self.cpg_network.reset(done_env_ids)
+
+    @staticmethod
+    def _scale_helper(action: torch.Tensor, lower_lim: float, upper_lim: float) -> torch.Tensor:
+        """Linearly scale from [-1, 1] into [lower_lim, upper_lim] with clipping."""
+        scaled = lower_lim + 0.5 * (action + 1.0) * (upper_lim - lower_lim)
+        return torch.clamp(scaled, min=lower_lim, max=upper_lim)
     
     def forward(self):
         raise NotImplementedError
@@ -192,15 +198,14 @@ class ActorCriticCPG(nn.Module):
             # Reshape to [batch_size, NUM_CPG_PARAMS, num_actions] and transpose to [batch_size, num_actions, NUM_CPG_PARAMS]
             params = actor_output.view(batch_size, self.NUM_CPG_PARAMS, self.num_actions).transpose(1, 2)
             
-            # Extract parameters and apply ranges
-            mu_raw = params[..., 0]  # [batch_size, num_actions]
-            freq_raw = params[..., 1]
-            offset_raw = params[..., 2]
+            # Extract parameters and apply ranges using normalized actions in [-1, 1]
+            mu_raw = torch.clamp(params[..., 0], -1.0, 1.0)  # [batch_size, num_actions]
+            freq_raw = torch.clamp(params[..., 1], -1.0, 1.0)
+            offset_raw = torch.clamp(params[..., 2], -1.0, 1.0)
             
-            # Apply sigmoid/tanh to bound parameters
-            mu = torch.sigmoid(mu_raw) * (self.mu_range[1] - self.mu_range[0]) + self.mu_range[0]
-            frequency = torch.sigmoid(freq_raw) * (self.frequency_range[1] - self.frequency_range[0]) + self.frequency_range[0]
-            offset = torch.tanh(offset_raw) * self.offset_scale
+            mu = self._scale_helper(mu_raw, self.mu_range[0], self.mu_range[1])
+            frequency = self._scale_helper(freq_raw, self.frequency_range[0], self.frequency_range[1])
+            offset = self._scale_helper(offset_raw, self.offset_range[0], self.offset_range[1])
             
             # Generate joint commands via CPG
             joint_commands = self.cpg_network(mu, frequency, offset)
@@ -214,8 +219,14 @@ class ActorCriticCPG(nn.Module):
     def update_distribution(self, observations):
         """Update action distribution based on observations."""
         mean = self.actor(observations)
-        # Clamp mean to prevent NaN/Inf in distribution (addresses gradient explosion)
-        mean = torch.clamp(mean, min=-100.0, max=100.0)
+        
+        if self.enable_cpg:
+            # Keep means in [-1, 1] so scaling happens later
+            mean = torch.clamp(mean, min=-1.0, max=1.0)
+        else:
+            # Standard mode: clamp joint commands
+            mean = torch.clamp(mean, min=-1.0, max=1.0)
+        
         self.distribution = Normal(mean, mean * 0.0 + self.std)
     
     def act(self, observations, **kwargs):

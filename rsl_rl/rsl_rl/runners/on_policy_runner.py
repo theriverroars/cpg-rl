@@ -49,10 +49,10 @@ class OnPolicyRunner:
                 dt = 0.02  # default 50Hz control
             cpg_config["dt"] = dt
             # Set default ranges if not provided
-            cpg_config.setdefault("coupling_strength", 1.0)
-            cpg_config.setdefault("frequency_range", (1.0, 3.0))
-            cpg_config.setdefault("mu_range", (0.0, 1.0))
-            cpg_config.setdefault("offset_range", (-0.5, 0.5))
+            cpg_config.setdefault("coupling_strength", 0.5) #, 1.0)) # Enable coupling for inter-leg coordination
+            cpg_config.setdefault("frequency_range", (0.5, 4.0)) #, (1.0, 3.0))  # Broader range for exploration
+            cpg_config.setdefault("mu_range", (0.2, 1.0)) #,  (0.0, 3.0))  # Minimum baseline amplitude for movement
+            cpg_config.setdefault("offset_range", (-1.0, 1.0)) #, (-0.5, 0.5)) # Wider offset for richer motion
             self.policy_cfg["cpg_config"] = cpg_config
         
         actor_critic_class = eval(self.policy_cfg.pop("class_name"))  # ActorCritic

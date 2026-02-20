@@ -282,18 +282,11 @@ def track_lin_vel_xy_exp(
     """Reward tracking of linear velocity commands (xy axes) using exponential kernel."""
     # extract the used quantities (to enable type-hinting)
     asset: RigidObject = env.scene[asset_cfg.name]
-    small_commands = torch.norm(env.command_manager.get_command(command_name)[:, :2], dim=-1) < 0.1
-    track_commands = env.command_manager.get_command(command_name)[:, :2] * (~small_commands)
-    # compute the error
+    # compute the error - track ALL commands including small ones
     lin_vel_error = torch.sum(
-        torch.square(track_commands - asset.data.root_lin_vel_b[:, :2]), 
+        torch.square(env.command_manager.get_command(command_name)[:, :2] - asset.data.root_lin_vel_b[:, :2]),
         dim=1,
     )
-    # # compute the error
-    # lin_vel_error = torch.sum(
-    #     torch.square(env.command_manager.get_command(command_name)[:, :2] - asset.data.root_lin_vel_b[:, :2]),
-    #     dim=1,
-    # )
     return torch.exp(-lin_vel_error / std**2)
 
 

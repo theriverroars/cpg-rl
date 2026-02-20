@@ -101,9 +101,9 @@ def main():
         # Re-parse agent config with CPG enabled
         agent_cfg = cli_args.parse_rsl_rl_cfg(args_cli.task, args_cli, play=True)
     
-    # Use history_length from checkpoint if not specified via CLI
-    if args_cli.history_length == 0 and checkpoint_history_length > 0:
-        print(f"[INFO] Using history_length={checkpoint_history_length} from checkpoint.")
+    # Always use history_length from checkpoint to match model architecture
+    if checkpoint_history_length != args_cli.history_length:
+        print(f"[INFO] Overriding history_length from {args_cli.history_length} to {checkpoint_history_length} (from checkpoint).")
         args_cli.history_length = checkpoint_history_length
     
     # Update agent config with checkpoint config
@@ -120,15 +120,17 @@ def main():
         env = RslRlVecEnvWrapper(env)
 
     # specify directory for logging experiments
-    log_root_path = os.path.join("logs", "rsl_rl", agent_cfg.experiment_name)
-    log_root_path = os.path.abspath(log_root_path)
-    print(f"[INFO] Loading experiment from directory: {log_root_path}")
+    # log_root_path = os.path.join("logs", "rsl_rl", agent_cfg.experiment_name)
+    # log_root_path = os.path.abspath(log_root_path)
+    # print(f"[INFO] Loading experiment from directory: {log_root_path}")
     resume_path = get_checkpoint_path(log_root_path, args_cli.load_run, agent_cfg.load_checkpoint)
 
     # load previously trained model
     ppo_runner = OnPolicyRunner(env, agent_cfg.to_dict(), log_dir=None, device=agent_cfg.device)
     ppo_runner.load(resume_path)
     print(f"[INFO]: Loading model checkpoint from: {resume_path}")
+
+    # exit()
 
     # obtain the trained policy for inference
     policy = ppo_runner.get_inference_policy(device=env.unwrapped.device)
@@ -155,15 +157,27 @@ def main():
         # set the camera view
         env.unwrapped.sim.set_camera_view(eye=cam_eye, target=cam_target)
 
+    i = 0
+
     # simulate environment
     while simulation_app.is_running():
+        i = i + 1
         # run everything in inference mode
         with torch.inference_mode():
             # agent stepping
             actions = policy(obs)
             # env stepping
             obs, _, _, infos = env.step(actions)
+            print("Obs:", obs)
             # import pdb; pdb.set_trace()
+
+            #Print actions and commanded velocities for debugging
+            print("Actions:", actions)
+
+            #Exit after 5 iterations
+            # if i >=5:
+            #     exit()
+            
 
             if args_cli.video and len(frames) < args_cli.video_length:
                 base_env = env.unwrapped

@@ -12,24 +12,9 @@ import torch.nn as nn
 
 
 class HopfOscillator(nn.Module):
-    """
-    Hopf oscillator for CPG implementation.
-    
-    The Hopf oscillator generates rhythmic patterns using the following equations:
-    dx/dt = mu * (mu - r^2) * x - omega * y
-    dy/dt = mu * (mu - r^2) * y + omega * x
-    
-    where r^2 = x^2 + y^2, and omega = 2 * pi * frequency
-    
-    For locomotion, we use the x component as the output signal.
-    """
-    
+    """First-order Hopf oscillator (kept for compatibility, unused by default)."""
+
     def __init__(self, dt: float = 0.02, device: str = "cpu"):
-        """
-        Args:
-            dt: Time step for integration (default: 0.02s for 50Hz control)
-            device: Device to run computations on
-        """
         super().__init__()
         self.dt = dt
         self.device = device
@@ -39,53 +24,85 @@ class HopfOscillator(nn.Module):
         state: torch.Tensor,
         mu: torch.Tensor,
         frequency: torch.Tensor,
-        coupling: torch.Tensor = None
+        coupling: torch.Tensor = None,
     ) -> torch.Tensor:
-        """
-        Integrate the Hopf oscillator for one time step.
-        
-        Args:
-            state: Current oscillator state [batch_size, num_oscillators, 2] where 2 = [x, y]
-            mu: Amplitude parameter [batch_size, num_oscillators]
-            frequency: Frequency parameter in Hz [batch_size, num_oscillators]
-            coupling: Optional coupling from other oscillators [batch_size, num_oscillators]
-            
-        Returns:
-            New state [batch_size, num_oscillators, 2]
-        """
-        x = state[..., 0]  # [batch_size, num_oscillators]
-        y = state[..., 1]  # [batch_size, num_oscillators]
-        
-        # Compute radius squared
+        x = state[..., 0]
+        y = state[..., 1]
         r_squared = x ** 2 + y ** 2
-        
-        # Angular frequency
         omega = 2 * torch.pi * frequency
-        
-        # Hopf oscillator dynamics
+
+        # print("Dimensions mu:",  mu.shape)
+
+        # exit()
         dx = mu * (mu - r_squared) * x - omega * y
         dy = mu * (mu - r_squared) * y + omega * x
-        
-        # Add coupling if provided
         if coupling is not None:
             dx = dx + coupling
-        
-        # Euler integration
         x_new = x + dx * self.dt
         y_new = y + dy * self.dt
-        
-        # Stack back into state
-        state_new = torch.stack([x_new, y_new], dim=-1)
-        
-        return state_new
+        return torch.stack([x_new, y_new], dim=-1)
+
+
+class SecondOrderOscillator(nn.Module):
+    """Second-order CPG oscillator with explicit acceleration on amplitude."""
+
+    def __init__(self, dt: float = 0.02, sub_dt: float = 0.001, device: str = "cpu"):
+        super().__init__()
+        self.dt = dt
+        self.sub_dt = sub_dt
+        self.device = device
+        # Gain for critically damped convergence toward sqrt(mu)
+        self._a = 150.0
+        self.register_buffer("two_pi", torch.tensor(2.0 * torch.pi, device=device))
+
+    def forward(
+        self,
+        state: torch.Tensor,
+        velocity: torch.Tensor,
+        mu: torch.Tensor,
+        frequency: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """
+        Integrate amplitude/phase with a second-order system.
+
+        state: [batch, num_osc, 2] -> [r, theta]
+        velocity: [batch, num_osc, 2] -> [r_dot, theta_dot]
+        mu: target amplitude (>=0), [batch, num_osc]
+        frequency: Hz, [batch, num_osc]
+        """
+        r = state[..., 0]
+        theta = state[..., 1]
+        r_dot = velocity[..., 0]
+        theta_dot = velocity[..., 1]
+
+        # Target radius follows sqrt(mu)
+        target_r = torch.sqrt(torch.clamp(mu, min=0.0))
+        # Constant angular velocity from frequency
+        theta_dot = self.two_pi * frequency
+
+        # Sub-steps for stability
+        n_substeps = max(1, int(self.dt / self.sub_dt))
+        sub_dt = self.dt / n_substeps
+
+        a = self._a
+        for _ in range(n_substeps):
+            d2r = a * (0.25 * a * (target_r - r) - r_dot)
+            r_dot = r_dot + d2r * sub_dt
+            r = r + r_dot * sub_dt
+            theta = theta + theta_dot * sub_dt
+        theta = torch.remainder(theta, self.two_pi)
+
+        new_state = torch.stack([r, theta], dim=-1)
+        new_velocity = torch.stack([r_dot, theta_dot], dim=-1)
+        return new_state, new_velocity
 
 
 class CPGNetwork(nn.Module):
     """
     CPG network for quadruped locomotion with 12 oscillators (3 per leg).
     
-    Each leg has 3 oscillators (hip, thigh, calf) with intra-leg coupling.
-    The RL policy outputs mu, phi (phase offset), and offset for each oscillator.
+    Each leg has 3 oscillators (hip, thigh, calf). Coupling is disabled.
+    The RL policy outputs mu, frequency, and offset for each oscillator.
     """
     
     # Constants
@@ -98,7 +115,7 @@ class CPGNetwork(nn.Module):
         num_legs: int = 4,
         num_joints_per_leg: int = 3,
         dt: float = 0.02,
-        coupling_strength: float = 1.0,
+        coupling_strength: float = 0.0,
         device: str = "cpu",
     ):
         """
@@ -119,34 +136,22 @@ class CPGNetwork(nn.Module):
         self.coupling_strength = coupling_strength
         self.device = device
         
-        # Hopf oscillator
-        self.oscillator = HopfOscillator(dt=dt, device=device)
-        
-        # Initialize oscillator states: [num_envs, num_oscillators, 2]
-        # Start with small random values to break symmetry
-        # Use persistent=False so this is not saved/loaded with state_dict (it's environment-specific)
+        # Use second-order oscillator for better stability and expressiveness
+        self.oscillator = SecondOrderOscillator(dt=dt, sub_dt=0.001, device=device)
+
+        # Initialize oscillator states/velocities: [num_envs, num_oscillators, 2]
         self.register_buffer(
             "oscillator_states",
-            self.INITIAL_STATE_SCALE * torch.randn(num_envs, self.num_oscillators, self.OSCILLATOR_STATE_DIM, device=device),
-            persistent=False
+            self.INITIAL_STATE_SCALE * torch.randn(
+                num_envs, self.num_oscillators, self.OSCILLATOR_STATE_DIM, device=device
+            ),
+            persistent=False,
         )
-        
-        # Coupling matrix: oscillators on the same leg are coupled
-        # Shape: [num_oscillators, num_oscillators]
-        coupling_matrix = torch.zeros(self.num_oscillators, self.num_oscillators, device=device)
-        
-        for leg_idx in range(num_legs):
-            # Get indices for this leg's oscillators
-            start_idx = leg_idx * num_joints_per_leg
-            end_idx = start_idx + num_joints_per_leg
-            
-            # Couple all oscillators within this leg
-            for i in range(start_idx, end_idx):
-                for j in range(start_idx, end_idx):
-                    if i != j:
-                        coupling_matrix[i, j] = 1.0
-        
-        self.register_buffer("coupling_matrix", coupling_matrix)
+        self.register_buffer(
+            "oscillator_velocities",
+            torch.zeros(num_envs, self.num_oscillators, self.OSCILLATOR_STATE_DIM, device=device),
+            persistent=False,
+        )
         
     def reset(self, env_ids: torch.Tensor = None):
         """
@@ -160,6 +165,9 @@ class CPGNetwork(nn.Module):
         
         # Reset to small random values
         self.oscillator_states[env_ids] = self.INITIAL_STATE_SCALE * torch.randn(
+            len(env_ids), self.num_oscillators, self.OSCILLATOR_STATE_DIM, device=self.device
+        )
+        self.oscillator_velocities[env_ids] = torch.zeros(
             len(env_ids), self.num_oscillators, self.OSCILLATOR_STATE_DIM, device=self.device
         )
     
@@ -180,23 +188,20 @@ class CPGNetwork(nn.Module):
         Returns:
             Joint commands [num_envs, num_oscillators]
         """
-        # Compute coupling influence
-        # For each oscillator, sum the states of coupled oscillators
-        x_values = self.oscillator_states[..., 0]  # [num_envs, num_oscillators]
+        # print("Dimensions mu:", mu.shape)
         
-        # Matrix multiply to get coupling: [num_envs, num_oscillators]
-        coupling = torch.matmul(x_values, self.coupling_matrix.T) * self.coupling_strength
-        
-        # Update oscillator states
-        self.oscillator_states = self.oscillator(
+        # Update oscillator states (no coupling)
+        self.oscillator_states, self.oscillator_velocities = self.oscillator(
             self.oscillator_states,
+            self.oscillator_velocities,
             mu,
             frequency,
-            coupling
+            # self.coupling_strength
         )
         
-        # Generate joint commands: amplitude * oscillator_output + offset
-        # Use x component of oscillator state
-        joint_commands = mu * self.oscillator_states[..., 0] + offset
+        # Generate joint commands: r * cos(theta) + offset
+        r = self.oscillator_states[..., 0]
+        theta = self.oscillator_states[..., 1]
+        joint_commands = r * torch.cos(theta) + offset
         
         return joint_commands
