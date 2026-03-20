@@ -31,6 +31,7 @@ parser.add_argument("--use_cnn", action="store_true", default=None, help="Name o
 parser.add_argument("--arm_fixed", action="store_true", default=False, help="Fix the robot's arms.")
 parser.add_argument("--use_rnn", action="store_true", default=False, help="Use RNN in the actor-critic model.")
 parser.add_argument("--history_length", default=0, type=int, help="Length of history buffer.")
+parser.add_argument("--enable_cpg", action="store_true", default=False, help="Enable CPG (Central Pattern Generator) with Hopf oscillators.")
 
 # append RSL-RL cli arguments
 cli_args.add_rsl_rl_args(parser)
@@ -71,19 +72,16 @@ from utils import quat2eulers
 
 
 def main():
-    """Train with RSL-RL agent."""
+    """Play with a trained RSL-RL agent."""
     # parse configuration
-    # env_cfg: ManagerBasedRLEnvCfg = parse_env_cfg(
-    #     args_cli.task, use_gpu=not args_cli.cpu, num_envs=args_cli.num_envs, use_fabric=not args_cli.disable_fabric
-    # )
     env_cfg = parse_env_cfg(args_cli.task, num_envs=args_cli.num_envs)
-    agent_cfg: RslRlOnPolicyRunnerCfg = cli_args.parse_rsl_rl_cfg(args_cli.task, args_cli)
+    
+    # Get the initial agent config from CLI args (this sets up CPG if --enable_cpg is passed)
+    agent_cfg: RslRlOnPolicyRunnerCfg = cli_args.parse_rsl_rl_cfg(args_cli.task, args_cli, play=True)
 
     # specify directory for logging experiments
     log_root_path = os.path.join("logs", "rsl_rl", agent_cfg.experiment_name)
     log_root_path = os.path.abspath(log_root_path)
-    # print(f"[INFO] Logging experiment in directory: {log_root_path}")
-    # specify directory for logging runs: {time-stamp}_{run_name}
     log_dir = os.path.join(log_root_path, args_cli.load_run)
     print(f"[INFO] Loading run from directory: {log_dir}")
 
@@ -91,6 +89,25 @@ def main():
     log_agent_cfg_file_path = os.path.join(log_dir, "params", "agent.yaml")
     assert os.path.exists(log_agent_cfg_file_path), f"Agent config file not found: {log_agent_cfg_file_path}"
     log_agent_cfg_dict = load_yaml(log_agent_cfg_file_path)
+    
+    # Check if the loaded checkpoint was trained with CPG
+    checkpoint_has_cpg = log_agent_cfg_dict.get("policy", {}).get("enable_cpg", False)
+    checkpoint_history_length = log_agent_cfg_dict.get("policy", {}).get("history_length", 0)
+    
+    # If checkpoint has CPG but CLI doesn't specify, enable CPG
+    if checkpoint_has_cpg and not args_cli.enable_cpg:
+        print("[INFO] Checkpoint was trained with CPG. Enabling CPG mode for inference.")
+        args_cli.enable_cpg = True
+        # Re-parse agent config with CPG enabled
+        agent_cfg = cli_args.parse_rsl_rl_cfg(args_cli.task, args_cli, play=True)
+    
+    # Always use history_length from checkpoint to match model architecture
+    if checkpoint_history_length != args_cli.history_length:
+        print(f"[INFO] Overriding history_length from {args_cli.history_length} to {checkpoint_history_length} (from checkpoint).")
+        args_cli.history_length = checkpoint_history_length
+    
+    # Update agent config with checkpoint config
+    # This will override things like learning params, but keep the CPG config properly set
     update_class_from_dict(agent_cfg, log_agent_cfg_dict)
 
 
@@ -103,15 +120,17 @@ def main():
         env = RslRlVecEnvWrapper(env)
 
     # specify directory for logging experiments
-    log_root_path = os.path.join("logs", "rsl_rl", agent_cfg.experiment_name)
-    log_root_path = os.path.abspath(log_root_path)
-    print(f"[INFO] Loading experiment from directory: {log_root_path}")
+    # log_root_path = os.path.join("logs", "rsl_rl", agent_cfg.experiment_name)
+    # log_root_path = os.path.abspath(log_root_path)
+    # print(f"[INFO] Loading experiment from directory: {log_root_path}")
     resume_path = get_checkpoint_path(log_root_path, args_cli.load_run, agent_cfg.load_checkpoint)
 
     # load previously trained model
     ppo_runner = OnPolicyRunner(env, agent_cfg.to_dict(), log_dir=None, device=agent_cfg.device)
     ppo_runner.load(resume_path)
     print(f"[INFO]: Loading model checkpoint from: {resume_path}")
+
+    # exit()
 
     # obtain the trained policy for inference
     policy = ppo_runner.get_inference_policy(device=env.unwrapped.device)
@@ -138,15 +157,27 @@ def main():
         # set the camera view
         env.unwrapped.sim.set_camera_view(eye=cam_eye, target=cam_target)
 
+    i = 0
+
     # simulate environment
     while simulation_app.is_running():
+        i = i + 1
         # run everything in inference mode
         with torch.inference_mode():
             # agent stepping
             actions = policy(obs)
             # env stepping
             obs, _, _, infos = env.step(actions)
+            print("Obs:", obs)
             # import pdb; pdb.set_trace()
+
+            #Print actions and commanded velocities for debugging
+            print("Actions:", actions)
+
+            #Exit after 5 iterations
+            # if i >=5:
+            #     exit()
+            
 
             if args_cli.video and len(frames) < args_cli.video_length:
                 base_env = env.unwrapped

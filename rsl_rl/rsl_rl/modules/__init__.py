@@ -7,7 +7,9 @@ from .actor_critic import ActorCritic
 from .actor_critic_recurrent import ActorCriticRecurrent
 from .actor_critic_depth_cnn import ActorCriticDepthCNN, ActorCriticDepthCNNRecurrent
 from .actor_critic_history import ActorCriticHistory
+from .actor_critic_cpg import ActorCriticCPG
 from .normalizer import EmpiricalNormalization
+from .cpg import CPGNetwork, HopfOscillator
 
 __all__ = [
     "ActorCritic", 
@@ -15,5 +17,8 @@ __all__ = [
     "ActorCriticDepthCNN", 
     "ActorCriticDepthCNNRecurrent", 
     "EmpiricalNormalization", 
-    "ActorCriticHistory"
+    "ActorCriticHistory",
+    "ActorCriticCPG",
+    "CPGNetwork",
+    "HopfOscillator",
 ]

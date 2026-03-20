@@ -13,7 +13,7 @@ from torch.utils.tensorboard import SummaryWriter as TensorboardSummaryWriter
 import rsl_rl
 from rsl_rl.algorithms import PPO
 from rsl_rl.env import VecEnv
-from rsl_rl.modules import ActorCritic, ActorCriticRecurrent, ActorCriticDepthCNN, ActorCriticDepthCNNRecurrent, EmpiricalNormalization
+from rsl_rl.modules import ActorCritic, ActorCriticRecurrent, ActorCriticDepthCNN, ActorCriticDepthCNNRecurrent, EmpiricalNormalization, ActorCriticCPG
 from rsl_rl.utils import store_code_state
 
 
@@ -36,6 +36,24 @@ class OnPolicyRunner:
         if self.cfg.get("use_cnn", False):
             num_actor_obs_prop = self.env.unwrapped.observation_manager.compute_group("proprio").shape[1]
             self.policy_cfg["num_actor_obs_prop"] = num_actor_obs_prop * (self.policy_cfg.get("history_length", 0) + 1)
+        
+        # Add CPG configuration if enabled
+        if self.policy_cfg.get("enable_cpg", False):
+            cpg_config = self.policy_cfg.get("cpg_config", {})
+            cpg_config["num_envs"] = self.env.num_envs
+            cpg_config["device"] = self.device
+            # Get time step from environment
+            if hasattr(self.env.unwrapped, 'cfg'):
+                dt = self.env.unwrapped.cfg.sim.dt * self.env.unwrapped.cfg.decimation
+            else:
+                dt = 0.02  # default 50Hz control
+            cpg_config["dt"] = dt
+            # Set default ranges if not provided
+            cpg_config.setdefault("coupling_strength", 0.5) #, 1.0)) # Enable coupling for inter-leg coordination
+            cpg_config.setdefault("frequency_range", (0.5, 4.0)) #, (1.0, 3.0))  # Broader range for exploration
+            cpg_config.setdefault("mu_range", (0.2, 1.0)) #,  (0.0, 3.0))  # Minimum baseline amplitude for movement
+            cpg_config.setdefault("offset_range", (-1.0, 1.0)) #, (-0.5, 0.5)) # Wider offset for richer motion
+            self.policy_cfg["cpg_config"] = cpg_config
         
         actor_critic_class = eval(self.policy_cfg.pop("class_name"))  # ActorCritic
         actor_critic: ActorCritic | ActorCriticRecurrent | ActorCriticDepthCNN | ActorCriticDepthCNNRecurrent = actor_critic_class(
@@ -60,13 +78,22 @@ class OnPolicyRunner:
         else:
             self.obs_normalizer = torch.nn.Identity()  # no normalization
             self.critic_obs_normalizer = torch.nn.Identity()  # no normalization
+        
+        # Determine action storage size
+        if self.cfg.get("enable_cpg", False) or self.policy_cfg.get("enable_cpg", False):
+            # When CPG is enabled, we store CPG parameters (3 per joint)
+            action_storage_size = self.env.num_actions * 3
+        else:
+            # Normal mode: store joint commands directly
+            action_storage_size = self.env.num_actions
+        
         # init storage and model
         self.alg.init_storage(
             self.env.num_envs,
             self.num_steps_per_env,
             [num_obs],
             [num_critic_obs],
-            [self.env.num_actions],
+            [action_storage_size],
         )
 
         # Log
@@ -284,7 +311,9 @@ class OnPolicyRunner:
 
     def load(self, path, load_optimizer=True):
         loaded_dict = torch.load(path)
-        self.alg.actor_critic.load_state_dict(loaded_dict["model_state_dict"])
+        # Use strict=False to allow loading checkpoints with different num_envs
+        # (CPG oscillator_states will be re-initialized to current num_envs)
+        self.alg.actor_critic.load_state_dict(loaded_dict["model_state_dict"], strict=False)
         if self.empirical_normalization:
             self.obs_normalizer.load_state_dict(loaded_dict["obs_norm_state_dict"])
             self.critic_obs_normalizer.load_state_dict(loaded_dict["critic_obs_norm_state_dict"])

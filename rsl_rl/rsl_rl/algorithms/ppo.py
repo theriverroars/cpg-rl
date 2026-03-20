@@ -78,7 +78,14 @@ class PPO:
         # need to record obs and critic_obs before env.step()
         self.transition.observations = obs
         self.transition.critic_observations = critic_obs
-        return self.transition.actions
+        
+        # Convert actions to joint commands if CPG is enabled
+        if hasattr(self.actor_critic, 'get_joint_commands'):
+            joint_commands = self.actor_critic.get_joint_commands(self.transition.actions)
+        else:
+            joint_commands = self.transition.actions
+        
+        return joint_commands
 
     def process_env_step(self, rewards, dones, infos):
         self.transition.rewards = rewards.clone()

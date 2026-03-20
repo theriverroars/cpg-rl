@@ -236,6 +236,13 @@ class CustomGo2RewardsCfg(RewardsCfg):
         weight=-2e-5,
         params={"asset_cfg": SceneEntityCfg("robot", joint_names=".*")},
     )
+
+    # Try nxt iteration
+    # joint_activity = RewTerm(
+    #     func=mdp.joint_vel_l2,
+    #     weight=0.002,  # Small positive reward for any joint movement
+    #     params={"asset_cfg": SceneEntityCfg("robot", joint_names=[".*_hip_joint", ".*_thigh_joint", ".*_calf_joint"])},
+    # )
     # feet_slide = RewTerm(
     #     func=mdp.feet_slide,
     #     weight=-0.05,
