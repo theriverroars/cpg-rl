@@ -1,3 +1,6 @@
+## This repository is a modified version of [legged-loco](https://github.com/yang-zj1026/legged-loco).
+
+
 # CPG (Central Pattern Generator) with Hopf Oscillators
 
 This implementation adds CPG functionality to the locomotion training using Hopf oscillators.
