@@ -8,9 +8,17 @@
 """Launch Isaac Sim Simulator first."""
 
 import argparse
+import os
 import subprocess
+import sys
 
 from omni.isaac.lab.app import AppLauncher
+
+# Ensure the workspace copy of rsl_rl is imported before any installed package.
+_script_dir = os.path.dirname(os.path.abspath(__file__))
+_local_rsl_rl = os.path.abspath(os.path.join(_script_dir, "..", "rsl_rl"))
+if os.path.isdir(_local_rsl_rl) and _local_rsl_rl not in sys.path:
+    sys.path.insert(0, _local_rsl_rl)
 
 # local imports
 import cli_args  # isort: skip
