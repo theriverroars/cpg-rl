@@ -1,66 +1,123 @@
-# Legged Loco
-This repo is used to train low-level locomotion policy of Unitree Go2 and H1 in Isaac Lab.
-
-<p align="center">
-<img src="./src/go2_teaser.gif" alt="First Demo" width="45%">
-&emsp;
-<img src="./src/h1_teaser.gif" alt="Second Demo" width="45%">
-</p>
+## This repository is a modified version of [legged-loco](https://github.com/yang-zj1026/legged-loco).
 
 
-## Installation
-1. Create a new conda environment with python 3.10.
-    ```shell
-    conda create -n isaaclab python=3.10
-    conda activate isaaclab
-    ```
+# CPG (Central Pattern Generator) with Hopf Oscillators
 
-2. Make sure that Isaac Sim is installed on your machine. Otherwise follow [this guideline](https://docs.omniverse.nvidia.com/isaacsim/latest/installation/install_workstation.html) to install it. If installing via the Omniverse Launcher, please ensure that Isaac Sim 4.1.0 is selected and installed. On Ubuntu 22.04 or higher, you could install it via pip:
-    ```shell
-    pip install isaacsim-rl==4.1.0 isaacsim-replicator==4.1.0 isaacsim-extscache-physics==4.1.0 isaacsim-extscache-kit-sdk==4.1.0 isaacsim-extscache-kit==4.1.0 isaacsim-app==4.1.0 --extra-index-url https://pypi.nvidia.com
-    ```
+This implementation adds CPG functionality to the locomotion training using Hopf oscillators.
 
-3. Install PyTorch.
-    ```shell
-    pip install torch==2.2.2 --index-url https://download.pytorch.org/whl/cu121
-    ```
+## Overview
 
-4. Clone the Isaac Lab repository, and link extensions. 
+The CPG system uses Hopf oscillators to generate rhythmic patterns for quadruped locomotion. Instead of directly outputting joint positions, the RL policy learns to output CPG parameters (amplitude, frequency, and offset) for each joint's oscillator.
 
-    **Note**: This codebase was tested with Isaac Lab 1.1.0 and may not be compatible with newer versions. Please make sure to use the modified version of Isaac Lab provided below, which includes important bug fixes and updates. As Isaac Lab is under active development, we will consider supporting newer versions in the future.
-    ```shell
-    git clone git@github.com:yang-zj1026/IsaacLab.git
-    cd IsaacLab
-    cd source/extensions
-    ln -s {THIS_REPO_DIR}/isaaclab_exts/omni.isaac.leggedloco .
-    cd ../..
-    ```
+### Key Features
 
-5. Run the Isaac Lab installer script and additionally install rsl rl in this repo.
-    ```shell
-    ./isaaclab.sh -i none
-    ./isaaclab.sh -p -m pip install -e {THIS_REPO_DIR}/rsl_rl
-    cd ..
-    ```
+- **12 Hopf Oscillators**: One for each joint (4 legs × 3 joints per leg)
+- **Intra-leg Coupling**: Oscillators on the same leg are coupled to coordinate movement
+- **RL-Controlled Parameters**: The policy outputs `mu` (amplitude), `frequency`, and `offset` for each oscillator
+- **Switchable**: Can easily toggle between CPG mode and standard direct control
 
+## Architecture
+
+### Hopf Oscillator
+
+Each oscillator follows the Hopf equations:
+```
+dx/dt = mu * (mu - r²) * x - omega * y
+dy/dt = mu * (mu - r²) * y + omega * x
+```
+
+where:
+- `r² = x² + y²`
+- `omega = 2π * frequency`
+- The x component is used as the output signal
+
+### CPG Network
+
+- **12 oscillators** organized in 4 legs with 3 joints each
+- **Coupling matrix**: Only oscillators on the same leg are coupled
+- **Output**: `joint_command = mu * oscillator_x + offset`
+
+### Actor-Critic with CPG
+
+When CPG is enabled:
+- **Actor output**: 36 values (3 parameters × 12 oscillators)
+  - `mu`: Amplitude range [0.0, 1.0]
+  - `frequency`: Frequency range [1.0, 3.0] Hz
+  - `offset`: Offset range [-0.5, 0.5]
+- **Storage**: CPG parameters are stored in rollout buffer
+- **Environment**: Joint commands (12 values) are sent to the robot
 
 ## Usage
-* train
 
-    ```shell
-    python scripts/train.py --task=go2_base --history_len=9 --run_name=XXX --max_iterations=2000 --save_interval=200 --headless
+### Training with CPG
 
-    python scripts/train.py --task=h1_base --run_name=XXX --max_iterations=2000 --save_interval=200 --headless
-    ```
+```bash
+python scripts/train.py --task=go2_base --enable_cpg --run_name=cpg_test --headless
+```
 
-* test
+### Training without CPG (standard mode)
 
-    ```shell
-    python scripts/play.py --task=go2_base_play --history_len=9 --load_run=RUN_NAME --num_envs=10
-    python scripts/play.py --task=h1_base_play --load_run=RUN_NAME --num_envs=10
-    ```
+```bash
+python scripts/train.py --task=go2_base --run_name=standard_test --headless
+```
 
-    Use `--headless` to enable headless mode. Add `--enable_cameras --video` for headless rendering and video saving.
+### Playing/Testing
 
-## Add New Environments
-You can add additional environments by placing them under `isaaclab_exts/omni.isaac.leggedloco/omni/isaac/leggedloco/config`.
+```bash
+python scripts/play.py --task=go2_base_play --enable_cpg --load_run=cpg_test
+```
+
+## Configuration
+
+CPG parameters can be configured in the runner. Default values:
+- `dt`: 0.02s (50Hz control frequency)
+- `coupling_strength`: 1.0
+- `frequency_range`: (1.0, 3.0) Hz
+- `mu_range`: (0.0, 1.0)
+- `offset_range`: (-0.5, 0.5)
+
+## Implementation Details
+
+### Files Modified
+- `rsl_rl/rsl_rl/modules/cpg.py`: Hopf oscillator and CPG network implementation
+- `rsl_rl/rsl_rl/modules/actor_critic_cpg.py`: CPG-augmented actor-critic
+- `rsl_rl/rsl_rl/algorithms/ppo.py`: Updated to convert CPG params to joint commands
+- `rsl_rl/rsl_rl/runners/on_policy_runner.py`: CPG configuration handling
+- `scripts/train.py`: Added `--enable_cpg` flag
+- `scripts/play.py`: Added `--enable_cpg` flag
+- `scripts/cli_args.py`: CPG configuration logic
+
+### Training Flow
+
+1. **Observation** → **Actor Network** → **CPG Parameters** (36 dims)
+2. **CPG Parameters** stored in rollout buffer for PPO updates
+3. **CPG Parameters** → **CPG Network** → **Joint Commands** (12 dims)
+4. **Joint Commands** → **Environment** → **Reward**
+
+### Advantages of CPG
+
+- **Structured Exploration**: Oscillators naturally produce rhythmic gaits
+- **Reduced Action Space Complexity**: Learning CPG parameters instead of raw joint commands
+- **Biological Inspiration**: Mimics how animals generate locomotion
+- **Smooth Movements**: Oscillators produce continuous, smooth trajectories
+
+## Testing
+
+Run the unit tests to verify CPG functionality:
+
+```bash
+# Install dependencies
+pip install torch pytest numpy gitpython
+
+# Run tests
+cd /home/runner/work/cpg-rl/cpg-rl
+PYTHONPATH=rsl_rl:$PYTHONPATH python3 tests/test_cpg.py
+```
+
+## Future Enhancements
+
+Potential improvements:
+- Inter-leg phase relationships for different gaits (trot, gallop, etc.)
+- Adaptive coupling strength
+- Sensory feedback integration into oscillator dynamics
+- Terrain-adaptive frequency modulation
